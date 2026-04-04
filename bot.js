@@ -12,9 +12,9 @@ const conv = {};
 bot.onText(/\/start/, async (msg) => {
   const { id: uid, username, first_name } = msg.from;
   const name = first_name + (username ? ` (@${username})` : '');
-  await db.upsertUser(uid, name, msg.chat.id, null);
+  db.upsertUser(uid, name, msg.chat.id, null);
 
-  if (await db.isManager(uid)) {
+  if (db.isManager(uid)) {
     menuManager(msg.chat.id, name);
   } else {
     bot.sendMessage(msg.chat.id,
@@ -31,13 +31,13 @@ bot.onText(/\/manager (.+)/, async (msg, match) => {
     bot.sendMessage(msg.chat.id, '❌ Невірний пароль.'); return;
   }
   const name = first_name + (username ? ` (@${username})` : '');
-  await db.promoteToManager(uid, msg.chat.id, name);
+  db.promoteToManager(uid, msg.chat.id, name);
   bot.sendMessage(msg.chat.id, '✅ Права керівника отримано!');
   menuManager(msg.chat.id, first_name);
 });
 
-bot.onText(/\/menu/,    async (msg) => { if (await db.isManager(msg.from.id)) menuManager(msg.chat.id); });
-bot.onText(/\/stats/,   async (msg) => { if (await db.isManager(msg.from.id)) showStats(msg.chat.id, msg.from.id); });
+bot.onText(/\/menu/,    async (msg) => { if (db.isManager(msg.from.id)) menuManager(msg.chat.id); });
+bot.onText(/\/stats/,   async (msg) => { if (db.isManager(msg.from.id)) showStats(msg.chat.id, msg.from.id); });
 bot.onText(/\/mytasks/, (msg) => showMyTasks(msg.chat.id, msg.from.id));
 
 bot.on('message', async (msg) => {
@@ -72,9 +72,9 @@ bot.on('message', async (msg) => {
       break;
 
     case 'done_comment': {
-      const task = await db.getTaskFull(s.taskId);
+      const task = db.getTaskFull(s.taskId);
       if (!task) { delete conv[uid]; return; }
-      await db.completeTask(s.taskId, text.trim());
+      db.completeTask(s.taskId, text.trim());
       delete conv[uid];
       bot.sendMessage(chatId, '🎉 Задача виконана! Керівник отримає звіт.');
       notifyManagerDone(task, text.trim());
@@ -105,8 +105,8 @@ bot.on('callback_query', async (q) => {
   bot.answerCallbackQuery(q.id);
 
   if (data === 'new_task') {
-    if (!await db.isManager(uid)) return;
-    const emps = await db.getEmployees();
+    if (!db.isManager(uid)) return;
+    const emps = db.getEmployees();
     if (!emps.length) {
       bot.sendMessage(chatId, '⚠️ Немає зареєстрованих співробітників.\nНехай підлеглі напишуть /start боту.');
       return;
@@ -146,7 +146,7 @@ bot.on('callback_query', async (q) => {
 
   } else if (data === 'confirm_task') {
     const s = conv[uid]; if (!s) return;
-    const taskId = await db.createTask({
+    const taskId = db.createTask({
       employeeId:  s.employeeId,
       managerId:   uid,
       title:       s.title,
@@ -154,7 +154,7 @@ bot.on('callback_query', async (q) => {
       checkpoints: s.checkpoints,
       deadline:    s.deadline,
     });
-    if (s.reminderMinutes) await db.addReminder(taskId, s.reminderMinutes);
+    if (s.reminderMinutes) db.addReminder(taskId, s.reminderMinutes);
     delete conv[uid];
     bot.sendMessage(chatId, `✅ Задача *#${taskId}* створена і відправлена!`, { parse_mode: 'Markdown' });
     notifyEmployee(taskId);
@@ -169,14 +169,14 @@ bot.on('callback_query', async (q) => {
   } else if (data === 'cancel') {
     delete conv[uid];
     bot.sendMessage(chatId, '❌ Скасовано.');
-    if (await db.isManager(uid)) menuManager(chatId);
+    if (db.isManager(uid)) menuManager(chatId);
 
   } else if (data === 'back_menu') {
-    if (await db.isManager(uid)) menuManager(chatId);
+    if (db.isManager(uid)) menuManager(chatId);
 
   } else if (data.startsWith('finish_')) {
     const taskId = parseInt(data.slice(7));
-    const task   = await db.getTask(taskId);
+    const task   = db.getTask(taskId);
     if (!task || task.employee_id !== uid) return;
     conv[uid] = { step: 'done_comment', taskId };
     bot.sendMessage(chatId, '💬 Напиши короткий коментар по виконанню:');
@@ -232,7 +232,7 @@ function askReminder(chatId) {
 }
 
 async function showConfirm(chatId, s) {
-  const emp    = await db.getUser(s.employeeId);
+  const emp    = db.getUser(s.employeeId);
   const cpText = s.checkpoints
     ? '\n' + s.checkpoints.split('\n').filter(Boolean).map((c,i) => `  ${i+1}. ${c}`).join('\n')
     : ' —';
@@ -259,7 +259,7 @@ async function showConfirm(chatId, s) {
 }
 
 async function notifyEmployee(taskId) {
-  const task = await db.getTaskFull(taskId);
+  const task = db.getTaskFull(taskId);
   if (!task?.employee) return;
   const cpLines = task.cpList.length
     ? '\n\n*Чек-поінти:*\n' + task.cpList.map((c,i) => `${i+1}. ${c}`).join('\n')
@@ -292,7 +292,7 @@ async function notifyManagerDone(task, comment) {
 }
 
 async function showAllTasks(chatId, managerId) {
-  const { allTasks } = await db.getManagerStats(managerId);
+  const { allTasks } = db.getManagerStats(managerId);
   if (!allTasks.length) { bot.sendMessage(chatId, '📭 Задач поки немає.'); return; }
   const icon = { pending: '🕐', done: '✅' };
   let text = '*📋 Всі твої задачі:*\n\n';
@@ -309,7 +309,7 @@ async function showAllTasks(chatId, managerId) {
 }
 
 async function showStats(chatId, managerId) {
-  const { todayTasks, overdueTasks } = await db.getManagerStats(managerId);
+  const { todayTasks, overdueTasks } = db.getManagerStats(managerId);
   const date = new Date().toLocaleDateString('uk-UA');
   const done = todayTasks.filter(t => t.status === 'done').length;
   const pend = todayTasks.filter(t => t.status === 'pending').length;
@@ -338,10 +338,10 @@ async function showStats(chatId, managerId) {
 }
 
 async function showMyTasks(chatId, userId) {
-  const tasks = await db.getEmployeeActiveTasks(userId);
+  const tasks = db.getEmployeeActiveTasks(userId);
   if (!tasks.length) { bot.sendMessage(chatId, '✅ Немає активних задач!'); return; }
   for (const t of tasks) {
-    const full = await db.getTaskFull(t.id);
+    const full = db.getTaskFull(t.id);
     const cpLines = full.cpList.length
       ? '\n\n*Чек-поінти:*\n' + full.cpList.map((c,i) => `${i+1}. ${c}`).join('\n')
       : '';
