@@ -14,8 +14,8 @@ function _startDailyReport(db, showStats) {
     if (next <= now) next.setDate(next.getDate() + 1);
     const delay = next - now;
     console.log(`📅 Авто-звіт о ${HOUR}:${String(MINUTE).padStart(2,'0')} (через ${Math.round(delay/60000)} хв)`);
-    setTimeout(async () => {
-      const managers = await db.getManagers();
+    setTimeout(() => {
+      const managers = db.getManagers();
       managers.forEach(m => {
         try { showStats(m.chat_id, m.user_id); } catch(e) { console.error(e.message); }
       });
@@ -26,14 +26,14 @@ function _startDailyReport(db, showStats) {
 }
 
 function _startReminderChecker(db, sendReminder) {
-  setInterval(async () => {
+  setInterval(() => {
     try {
-      const reminders = await db.getDueReminders();
+      const reminders = db.getDueReminders();
       for (const r of reminders) {
-        const emp = await db.getUser(r.employee_id);
+        const emp = db.getUser(r.employee_id);
         if (!emp) continue;
         sendReminder(r.task_id, emp.chat_id, r.title);
-        await db.markReminderSent(r.id);
+        db.markReminderSent(r.id);
         console.log(`⏰ Нагадування → задача #${r.task_id} → ${emp.username}`);
       }
     } catch(e) { console.error('Reminder error:', e.message); }
@@ -49,18 +49,18 @@ function _startOverdueChecker(bot, db) {
     const next = new Date();
     next.setHours(HOUR, MINUTE, 0, 0);
     if (next <= now) next.setDate(next.getDate() + 1);
-    setTimeout(async () => {
+    setTimeout(() => {
       try {
-        const managers = await db.getManagers();
+        const managers = db.getManagers();
         for (const m of managers) {
-          const { overdueTasks } = await db.getManagerStats(m.user_id);
+          const { overdueTasks } = db.getManagerStats(m.user_id);
           const byEmp = {};
           overdueTasks.forEach(t => {
             if (!byEmp[t.employee_id]) byEmp[t.employee_id] = [];
             byEmp[t.employee_id].push(t);
           });
           for (const [empId, tasks] of Object.entries(byEmp)) {
-            const emp = await db.getUser(parseInt(empId));
+            const emp = db.getUser(parseInt(empId));
             if (!emp) continue;
             const list = tasks.map(t => `• *${t.title}* (дедлайн: ${t.deadline})`).join('\n');
             bot.sendMessage(emp.chat_id,
