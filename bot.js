@@ -374,10 +374,5 @@ function offsetDate(days) {
 function fmtMin(m) { return m < 60 ? `${m} хв` : `${m/60} год`; }
 
 db.init();
-(async () => {
-  startSchedulers(bot, db, showStats, sendReminder);
-  console.log('🤖 TaskBot запущено!');
-}).catch(err => {
-  console.error('❌ Помилка ініціалізації БД:', err);
-  process.exit(1);
-});
+startSchedulers(bot, db, showStats, sendReminder);
+console.log('🤖 TaskBot запущено!');
