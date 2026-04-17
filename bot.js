@@ -77,6 +77,12 @@ bot.onText(/\/mystaff/, (msg) => {
 });
 
 // ─── /addstaff ────────────────────────────────────────────────────────────────
+// ─── /resetrole (тільки для тестування) ──────────────────────────────────────
+bot.onText(/\/resetrole/, (msg) => {
+  db.upsertUser(msg.from.id, msg.from.first_name, msg.chat.id, 'employee');
+  db.assignStaff(msg.from.id, null);
+  bot.sendMessage(msg.chat.id, '🔄 Роль скинута. Ти знову співробітник.\nНапиши /start');
+});
 bot.onText(/\/addstaff/, (msg) => {
   const u = db.getUser(msg.from.id);
   if (u?.role !== 'manager') {
