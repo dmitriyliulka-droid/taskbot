@@ -10,12 +10,13 @@ function init() {
     username   TEXT NOT NULL,
     chat_id    INTEGER NOT NULL,
     role       TEXT DEFAULT 'employee',
+    department TEXT DEFAULT NULL,
     manager_id INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
 
-  // Додаємо колонку manager_id якщо її ще немає (для існуючих БД)
   try { db.exec(`ALTER TABLE users ADD COLUMN manager_id INTEGER DEFAULT NULL`); } catch(e) {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN department TEXT DEFAULT NULL`); } catch(e) {}
 
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,8 +39,6 @@ function init() {
     sent      INTEGER DEFAULT 0
   )`);
 }
-
-// --- Користувачі ---
 
 function getUser(id) {
   return db.prepare('SELECT * FROM users WHERE user_id=?').get(id);
@@ -83,39 +82,39 @@ function upsertUser(userId, username, chatId, role) {
   }
 }
 
-function promoteToManager(userId, chatId, username) {
+function promoteToManager(userId, chatId, username, department) {
   upsertUser(userId, username, chatId, 'manager');
+  db.prepare('UPDATE users SET department=? WHERE user_id=?').run(department, userId);
 }
 
 function promoteToDirector(userId, chatId, username) {
   upsertUser(userId, username, chatId, 'director');
+  db.prepare("UPDATE users SET department='Комерційний директор' WHERE user_id=?").run(userId);
 }
 
-// Прив'язати підлеглого до керівника
 function assignStaff(employeeId, managerId) {
   db.prepare('UPDATE users SET manager_id=? WHERE user_id=?').run(managerId, employeeId);
 }
 
-// Отримати підлеглих конкретного керівника
 function getStaffOf(managerId) {
   return db.prepare('SELECT * FROM users WHERE manager_id=? ORDER BY username').all(managerId);
 }
 
-// Отримати керівника підлеглого
 function getManagerOf(employeeId) {
   const u = getUser(employeeId);
   if (!u?.manager_id) return null;
   return getUser(u.manager_id);
 }
 
-// Всі незакріплені співробітники (без керівника, не менеджери і не директори)
 function getUnassignedEmployees() {
   return db.prepare(
     "SELECT * FROM users WHERE manager_id IS NULL AND role='employee' ORDER BY username"
   ).all();
 }
 
-// --- Задачі ---
+function unassignAll() {
+  db.prepare('UPDATE users SET manager_id=NULL').run();
+}
 
 function createTask({ employeeId, managerId, title, description, checkpoints, deadline }) {
   const result = db.prepare(
@@ -141,7 +140,6 @@ function getManagerTasks(managerId) {
   return db.prepare('SELECT * FROM tasks WHERE manager_id=? ORDER BY created_at DESC').all(managerId);
 }
 
-// Задачі призначені підлеглим конкретного менеджера (для директора що ставить задачі його людям)
 function getTasksForStaffOf(managerId) {
   return db.prepare(`
     SELECT t.*, u.username as emp_name FROM tasks t
@@ -162,8 +160,6 @@ function completeTask(taskId, comment) {
   ).run(comment, taskId);
 }
 
-// --- Нагадування ---
-
 function addReminder(taskId, minutesFromNow) {
   const at = new Date(Date.now() + minutesFromNow * 60000).toISOString();
   db.prepare('INSERT INTO reminders (task_id,remind_at) VALUES (?,?)').run(taskId, at);
@@ -180,8 +176,6 @@ function getDueReminders() {
 function markReminderSent(id) {
   db.prepare('UPDATE reminders SET sent=1 WHERE id=?').run(id);
 }
-
-// --- Статистика ---
 
 function getManagerStats(managerId) {
   const today = new Date().toISOString().split('T')[0];
@@ -203,16 +197,14 @@ function getManagerStats(managerId) {
   `).all(managerId);
   return { todayTasks, overdueTasks, allTasks };
 }
-function unassignAll() {
-  db.prepare('UPDATE users SET manager_id=NULL').run();
-}
+
 module.exports = {
   init,
   upsertUser, getUser, getAllUsers, getEmployees, getManagers, getDirectors,
   isManager, isDirector, promoteToManager, promoteToDirector,
-  assignStaff, getStaffOf, getManagerOf, getUnassignedEmployees,
+  assignStaff, getStaffOf, getManagerOf, getUnassignedEmployees, unassignAll,
   createTask, getTask, getTaskFull, getManagerTasks, getTasksForStaffOf,
   getEmployeeActiveTasks, completeTask,
   addReminder, getDueReminders, markReminderSent,
-  getManagerStats, unassignAll,
+  getManagerStats,
 };
