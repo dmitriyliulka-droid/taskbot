@@ -9,6 +9,13 @@ if (!TOKEN) { console.error('❌ BOT_TOKEN не встановлено!'); proce
 const bot = new TelegramBot(TOKEN, { polling: true });
 const conv = {};
 
+// Назви відділів
+const DEPARTMENTS = {
+  b2b:  'Відділ Б2Б продажів',
+  b2c:  'Відділ Б2С продажів',
+  proc: 'Відділ закупівлі',
+};
+
 // ─── /start ───────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
   const { id: uid, username, first_name } = msg.from;
@@ -19,7 +26,7 @@ bot.onText(/\/start/, (msg) => {
   if (u.role === 'director') {
     menuDirector(msg.chat.id, first_name);
   } else if (u.role === 'manager') {
-    menuManager(msg.chat.id, first_name);
+    menuManager(msg.chat.id, first_name, u.department);
   } else {
     bot.sendMessage(msg.chat.id,
       `👋 Привіт, *${first_name}*!\n\nТи зареєстрований як *співробітник*.\nКоли керівник призначить тобі задачу — ти отримаєш сповіщення.\n\n📋 /mytasks — переглянути активні задачі`,
@@ -31,34 +38,37 @@ bot.onText(/\/start/, (msg) => {
 // ─── /director <пароль> ───────────────────────────────────────────────────────
 bot.onText(/\/director (.+)/, (msg, match) => {
   const { id: uid, username, first_name } = msg.from;
-  const pass = match[1].trim();
-  if (pass !== (process.env.DIRECTOR_PASSWORD || 'director123')) {
+  if (match[1].trim() !== (process.env.DIRECTOR_PASSWORD || 'director123')) {
     bot.sendMessage(msg.chat.id, '❌ Невірний пароль.'); return;
   }
   const name = first_name + (username ? ` (@${username})` : '');
   db.promoteToDirector(uid, msg.chat.id, name);
-  bot.sendMessage(msg.chat.id, '✅ Права комерційного директора отримано!');
+  bot.sendMessage(msg.chat.id, '✅ Права *комерційного директора* отримано!', { parse_mode: 'Markdown' });
   menuDirector(msg.chat.id, first_name);
 });
 
-// ─── /manager <пароль> ────────────────────────────────────────────────────────
-bot.onText(/\/manager (.+)/, (msg, match) => {
+// ─── /b2b, /b2c, /proc <пароль> ──────────────────────────────────────────────
+bot.onText(/\/b2b (.+)/, (msg, match) => promoteManagerCmd(msg, match, 'b2b'));
+bot.onText(/\/b2c (.+)/, (msg, match) => promoteManagerCmd(msg, match, 'b2c'));
+bot.onText(/\/proc (.+)/, (msg, match) => promoteManagerCmd(msg, match, 'proc'));
+
+function promoteManagerCmd(msg, match, deptKey) {
   const { id: uid, username, first_name } = msg.from;
-  const pass = match[1].trim();
-  if (pass !== (process.env.MANAGER_PASSWORD || 'admin123')) {
+  if (match[1].trim() !== (process.env.MANAGER_PASSWORD || 'admin123')) {
     bot.sendMessage(msg.chat.id, '❌ Невірний пароль.'); return;
   }
   const name = first_name + (username ? ` (@${username})` : '');
-  db.promoteToManager(uid, msg.chat.id, name);
-  bot.sendMessage(msg.chat.id, '✅ Права керівника відділу отримано!');
-  menuManager(msg.chat.id, first_name);
-});
+  const department = DEPARTMENTS[deptKey];
+  db.promoteToManager(uid, msg.chat.id, name, department);
+  bot.sendMessage(msg.chat.id, `✅ Права керівника *${department}* отримано!`, { parse_mode: 'Markdown' });
+  menuManager(msg.chat.id, first_name, department);
+}
 
 // ─── /menu ────────────────────────────────────────────────────────────────────
 bot.onText(/\/menu/, (msg) => {
   const u = db.getUser(msg.from.id);
   if (u?.role === 'director') menuDirector(msg.chat.id);
-  else if (u?.role === 'manager') menuManager(msg.chat.id);
+  else if (u?.role === 'manager') menuManager(msg.chat.id, null, u.department);
 });
 
 // ─── /stats ───────────────────────────────────────────────────────────────────
@@ -77,12 +87,23 @@ bot.onText(/\/mystaff/, (msg) => {
 });
 
 // ─── /addstaff ────────────────────────────────────────────────────────────────
+bot.onText(/\/addstaff/, (msg) => {
+  const u = db.getUser(msg.from.id);
+  if (u?.role !== 'manager') {
+    bot.sendMessage(msg.chat.id, '❌ Тільки керівник відділу може додавати підлеглих.');
+    return;
+  }
+  showAddStaff(msg.chat.id, msg.from.id);
+});
+
 // ─── /resetrole (тільки для тестування) ──────────────────────────────────────
 bot.onText(/\/resetrole/, (msg) => {
   db.upsertUser(msg.from.id, msg.from.first_name, msg.chat.id, 'employee');
   db.assignStaff(msg.from.id, null);
   bot.sendMessage(msg.chat.id, '🔄 Роль скинута. Ти знову співробітник.\nНапиши /start');
 });
+
+// ─── /unassignall (тільки для тестування) ────────────────────────────────────
 bot.onText(/\/unassignall/, (msg) => {
   const u = db.getUser(msg.from.id);
   if (u?.role !== 'director') {
@@ -91,14 +112,6 @@ bot.onText(/\/unassignall/, (msg) => {
   }
   db.unassignAll();
   bot.sendMessage(msg.chat.id, '🔄 Всі підлеглі відкріплені від відділів.');
-});
-bot.onText(/\/addstaff/, (msg) => {
-  const u = db.getUser(msg.from.id);
-  if (u?.role !== 'manager') {
-    bot.sendMessage(msg.chat.id, '❌ Тільки керівник відділу може додавати підлеглих.');
-    return;
-  }
-  showAddStaff(msg.chat.id, msg.from.id);
 });
 
 // ─── Текстові повідомлення (діалоги) ─────────────────────────────────────────
@@ -154,31 +167,26 @@ bot.on('callback_query', (q) => {
 
   const u = db.getUser(uid);
 
-  // Нова задача
   if (data === 'new_task') {
     if (!u || (u.role !== 'manager' && u.role !== 'director')) return;
     showEmployeeSelector(chatId, uid);
 
-  // Вибір співробітника
   } else if (data.startsWith('emp_')) {
     conv[uid] = { step: 'title', employeeId: parseInt(data.slice(4)) };
     bot.sendMessage(chatId, '📝 Введи *назву задачі*:', { parse_mode: 'Markdown' });
 
-  // Пропуск опису
   } else if (data === 'skip_desc') {
     const s = conv[uid]; if (!s) return;
     s.description = '';
     askCheckpoints(chatId);
     s.step = 'checkpoints';
 
-  // Пропуск чек-поінтів
   } else if (data === 'skip_checkpoints') {
     const s = conv[uid]; if (!s) return;
     s.checkpoints = '';
     askDeadline(chatId);
     s.step = 'deadline';
 
-  // Дедлайн
   } else if (data.startsWith('dl_')) {
     const s = conv[uid]; if (!s) return;
     const days = parseInt(data.slice(3));
@@ -186,14 +194,12 @@ bot.on('callback_query', (q) => {
     askReminder(chatId);
     s.step = 'reminder';
 
-  // Нагадування
   } else if (data.startsWith('rm_')) {
     const s = conv[uid]; if (!s) return;
     s.reminderMinutes = data === 'rm_none' ? null : parseInt(data.slice(3));
     s.step = 'confirm';
     showConfirm(chatId, s);
 
-  // Підтвердження задачі
   } else if (data === 'confirm_task') {
     const s = conv[uid]; if (!s) return;
     const taskId = db.createTask({
@@ -208,28 +214,22 @@ bot.on('callback_query', (q) => {
     delete conv[uid];
     bot.sendMessage(chatId, `✅ Задача *#${taskId}* створена і відправлена!`, { parse_mode: 'Markdown' });
     notifyEmployee(taskId);
-    // Якщо директор ставить задачу — повідомити керівника відділу
     if (u?.role === 'director') notifyManagerAboutTask(taskId);
     if (u?.role === 'director') menuDirector(chatId);
-    else menuManager(chatId);
+    else menuManager(chatId, null, u.department);
 
-  // Перегляд задач
   } else if (data === 'view_tasks') {
     showAllTasks(chatId, uid);
 
-  // Статистика
   } else if (data === 'today_stats') {
     showStats(chatId, uid);
 
-  // Мій персонал
   } else if (data === 'my_staff') {
     showMyStaff(chatId, uid);
 
-  // Додати підлеглого (тільки manager)
   } else if (data === 'add_staff') {
     showAddStaff(chatId, uid);
 
-  // Призначити підлеглого менеджеру
   } else if (data.startsWith('assign_')) {
     const employeeId = parseInt(data.slice(7));
     db.assignStaff(employeeId, uid);
@@ -237,19 +237,16 @@ bot.on('callback_query', (q) => {
     bot.sendMessage(chatId, `✅ *${emp.username}* додано до твого відділу!`, { parse_mode: 'Markdown' });
     showMyStaff(chatId, uid);
 
-  // Скасувати
   } else if (data === 'cancel') {
     delete conv[uid];
     bot.sendMessage(chatId, '❌ Скасовано.');
     if (u?.role === 'director') menuDirector(chatId);
-    else if (u?.role === 'manager') menuManager(chatId);
+    else if (u?.role === 'manager') menuManager(chatId, null, u.department);
 
-  // Назад в меню
   } else if (data === 'back_menu') {
     if (u?.role === 'director') menuDirector(chatId);
-    else if (u?.role === 'manager') menuManager(chatId);
+    else if (u?.role === 'manager') menuManager(chatId, null, u.department);
 
-  // Виконати задачу
   } else if (data.startsWith('finish_')) {
     const taskId = parseInt(data.slice(7));
     const task   = db.getTask(taskId);
@@ -261,35 +258,42 @@ bot.on('callback_query', (q) => {
 
 // ─── Меню директора ───────────────────────────────────────────────────────────
 function menuDirector(chatId, name) {
-  const greeting = name ? `👋 Привіт, *${name}*!\n\n` : '';
-  bot.sendMessage(chatId, `${greeting}👔 *Панель комерційного директора*`, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '➕ Нова задача',      callback_data: 'new_task'    }],
-        [{ text: '📋 Всі мої задачі',   callback_data: 'view_tasks'  }],
-        [{ text: '📊 Статистика',       callback_data: 'today_stats' }],
-        [{ text: '👥 Персонал',         callback_data: 'my_staff'    }],
-      ]
+  const greeting = name ? `👋 Привіт, *${name}*!\n` : '';
+  bot.sendMessage(chatId,
+    `${greeting}👔 *Комерційний директор*`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Нова задача',    callback_data: 'new_task'    }],
+          [{ text: '📋 Всі мої задачі', callback_data: 'view_tasks'  }],
+          [{ text: '📊 Статистика',     callback_data: 'today_stats' }],
+          [{ text: '👥 Персонал',       callback_data: 'my_staff'    }],
+        ]
+      }
     }
-  });
+  );
 }
 
 // ─── Меню менеджера ───────────────────────────────────────────────────────────
-function menuManager(chatId, name) {
-  const greeting = name ? `👋 Привіт, *${name}*!\n\n` : '';
-  bot.sendMessage(chatId, `${greeting}👨‍💼 *Панель керівника відділу*`, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '➕ Нова задача',      callback_data: 'new_task'    }],
-        [{ text: '📋 Всі мої задачі',   callback_data: 'view_tasks'  }],
-        [{ text: '📊 Статистика',       callback_data: 'today_stats' }],
-        [{ text: '👥 Мій відділ',       callback_data: 'my_staff'    }],
-        [{ text: '➕ Додати підлеглого', callback_data: 'add_staff'   }],
-      ]
+function menuManager(chatId, name, department) {
+  const greeting = name ? `👋 Привіт, *${name}*!\n` : '';
+  const dept = department || 'Відділ';
+  bot.sendMessage(chatId,
+    `${greeting}👨‍💼 *Керівник — ${dept}*`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Нова задача',      callback_data: 'new_task'    }],
+          [{ text: '📋 Всі мої задачі',   callback_data: 'view_tasks'  }],
+          [{ text: '📊 Статистика',       callback_data: 'today_stats' }],
+          [{ text: '👥 Мій відділ',       callback_data: 'my_staff'    }],
+          [{ text: '➕ Додати підлеглого', callback_data: 'add_staff'   }],
+        ]
+      }
     }
-  });
+  );
 }
 
 // ─── Вибір співробітника для задачі ──────────────────────────────────────────
@@ -298,12 +302,10 @@ function showEmployeeSelector(chatId, uid) {
   let employees = [];
 
   if (u.role === 'director') {
-    // Директор бачить всіх: менеджерів і співробітників
     const managers = db.getManagers();
     const emps = db.getEmployees();
     employees = [...managers, ...emps];
   } else if (u.role === 'manager') {
-    // Менеджер бачить тільки своїх підлеглих
     employees = db.getStaffOf(uid);
   }
 
@@ -316,7 +318,7 @@ function showEmployeeSelector(chatId, uid) {
   }
 
   const rows = employees.map(e => [{
-    text: `${e.role === 'manager' ? '👨‍💼' : '👤'} ${e.username}`,
+    text: `${e.role === 'manager' ? '👨‍💼' : '👤'} ${e.username}${e.department ? ' — ' + e.department : ''}`,
     callback_data: `emp_${e.user_id}`
   }]);
   rows.push([{ text: '❌ Скасувати', callback_data: 'cancel' }]);
@@ -328,7 +330,6 @@ function showMyStaff(chatId, uid) {
   const u = db.getUser(uid);
 
   if (u.role === 'director') {
-    // Директор бачить всіх менеджерів і їх підлеглих
     const managers = db.getManagers();
     if (!managers.length) {
       bot.sendMessage(chatId, '📭 Немає керівників відділів.');
@@ -337,6 +338,7 @@ function showMyStaff(chatId, uid) {
     let text = '👥 *Структура компанії:*\n\n';
     managers.forEach(m => {
       text += `👨‍💼 *${m.username}*\n`;
+      text += `   📁 ${m.department || 'Без відділу'}\n`;
       const staff = db.getStaffOf(m.user_id);
       if (staff.length) {
         staff.forEach(s => { text += `   └ 👤 ${s.username}\n`; });
@@ -345,7 +347,6 @@ function showMyStaff(chatId, uid) {
       }
       text += '\n';
     });
-    // Незакріплені співробітники
     const unassigned = db.getUnassignedEmployees();
     if (unassigned.length) {
       text += `❓ *Без відділу:*\n`;
@@ -358,14 +359,12 @@ function showMyStaff(chatId, uid) {
 
   } else if (u.role === 'manager') {
     const staff = db.getStaffOf(uid);
+    let text = `👥 *${u.department || 'Мій відділ'}:*\n\n`;
     if (!staff.length) {
-      bot.sendMessage(chatId, '📭 У тебе поки немає підлеглих.\nДодай їх через "Додати підлеглого".', {
-        reply_markup: { inline_keyboard: [[{ text: '↩️ Назад', callback_data: 'back_menu' }]] }
-      });
-      return;
+      text += '_Немає підлеглих. Додай їх через "Додати підлеглого"._';
+    } else {
+      staff.forEach(s => { text += `👤 ${s.username}\n`; });
     }
-    let text = '👥 *Твій відділ:*\n\n';
-    staff.forEach(s => { text += `👤 ${s.username}\n`; });
     bot.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard: [[{ text: '↩️ Назад', callback_data: 'back_menu' }]] }
@@ -475,14 +474,11 @@ function notifyEmployee(taskId) {
   );
 }
 
-// Повідомити керівника відділу що директор поставив задачу його підлеглому
 function notifyManagerAboutTask(taskId) {
   const task = db.getTaskFull(taskId);
   if (!task?.employee) return;
   const mgr = db.getManagerOf(task.employee_id);
-  if (!mgr) return;
-  // Не повідомляємо якщо задача поставлена самому менеджеру
-  if (mgr.user_id === task.employee_id) return;
+  if (!mgr || mgr.user_id === task.employee_id) return;
 
   bot.sendMessage(mgr.chat_id,
     `ℹ️ *Директор поставив задачу твоєму підлеглому*\n\n` +
@@ -505,7 +501,6 @@ function notifyManagerDone(task, comment) {
     { parse_mode: 'Markdown' }
   );
 
-  // Якщо задачу ставив директор — також повідомити керівника відділу про виконання
   const assigner = db.getUser(task.manager_id);
   if (assigner?.role === 'director') {
     const mgr = db.getManagerOf(task.employee_id);
