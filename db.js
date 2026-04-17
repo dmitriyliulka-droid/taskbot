@@ -203,7 +203,9 @@ function getManagerStats(managerId) {
   `).all(managerId);
   return { todayTasks, overdueTasks, allTasks };
 }
-
+function unassignAll() {
+  db.prepare('UPDATE users SET manager_id=NULL').run();
+}
 module.exports = {
   init,
   upsertUser, getUser, getAllUsers, getEmployees, getManagers, getDirectors,
@@ -212,5 +214,5 @@ module.exports = {
   createTask, getTask, getTaskFull, getManagerTasks, getTasksForStaffOf,
   getEmployeeActiveTasks, completeTask,
   addReminder, getDueReminders, markReminderSent,
-  getManagerStats,
+  getManagerStats, unassignAll,
 };

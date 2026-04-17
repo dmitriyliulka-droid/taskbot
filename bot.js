@@ -83,6 +83,15 @@ bot.onText(/\/resetrole/, (msg) => {
   db.assignStaff(msg.from.id, null);
   bot.sendMessage(msg.chat.id, '🔄 Роль скинута. Ти знову співробітник.\nНапиши /start');
 });
+bot.onText(/\/unassignall/, (msg) => {
+  const u = db.getUser(msg.from.id);
+  if (u?.role !== 'director') {
+    bot.sendMessage(msg.chat.id, '❌ Тільки директор може це зробити.');
+    return;
+  }
+  db.unassignAll();
+  bot.sendMessage(msg.chat.id, '🔄 Всі підлеглі відкріплені від відділів.');
+});
 bot.onText(/\/addstaff/, (msg) => {
   const u = db.getUser(msg.from.id);
   if (u?.role !== 'manager') {
