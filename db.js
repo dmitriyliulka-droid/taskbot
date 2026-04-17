@@ -4,18 +4,19 @@ const path = require('path');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'tasks.db');
 const db = new Database(DB_PATH);
 
-const run = (sql, params = []) => db.prepare(sql).run(params);
-const get = (sql, params = []) => db.prepare(sql).get(params);
-const all = (sql, params = []) => db.prepare(sql).all(params);
-
 function init() {
   db.exec(`CREATE TABLE IF NOT EXISTS users (
     user_id    INTEGER PRIMARY KEY,
     username   TEXT NOT NULL,
     chat_id    INTEGER NOT NULL,
     role       TEXT DEFAULT 'employee',
+    manager_id INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime'))
   )`);
+
+  // Додаємо колонку manager_id якщо її ще немає (для існуючих БД)
+  try { db.exec(`ALTER TABLE users ADD COLUMN manager_id INTEGER DEFAULT NULL`); } catch(e) {}
+
   db.exec(`CREATE TABLE IF NOT EXISTS tasks (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_id  INTEGER NOT NULL,
@@ -29,6 +30,7 @@ function init() {
     created_at   TEXT DEFAULT (datetime('now','localtime')),
     updated_at   TEXT DEFAULT (datetime('now','localtime'))
   )`);
+
   db.exec(`CREATE TABLE IF NOT EXISTS reminders (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id   INTEGER NOT NULL,
@@ -37,10 +39,37 @@ function init() {
   )`);
 }
 
-function getUser(id) { return get('SELECT * FROM users WHERE user_id=?', [id]); }
-function getEmployees() { return all("SELECT * FROM users WHERE role='employee' ORDER BY username"); }
-function getManagers() { return all("SELECT * FROM users WHERE role='manager'"); }
-function isManager(uid) { const u = getUser(uid); return u?.role === 'manager'; }
+// --- Користувачі ---
+
+function getUser(id) {
+  return db.prepare('SELECT * FROM users WHERE user_id=?').get(id);
+}
+
+function getAllUsers() {
+  return db.prepare('SELECT * FROM users ORDER BY username').all();
+}
+
+function getEmployees() {
+  return db.prepare("SELECT * FROM users WHERE role='employee' ORDER BY username").all();
+}
+
+function getManagers() {
+  return db.prepare("SELECT * FROM users WHERE role='manager' ORDER BY username").all();
+}
+
+function getDirectors() {
+  return db.prepare("SELECT * FROM users WHERE role='director' ORDER BY username").all();
+}
+
+function isManager(uid) {
+  const u = getUser(uid);
+  return u?.role === 'manager' || u?.role === 'director';
+}
+
+function isDirector(uid) {
+  const u = getUser(uid);
+  return u?.role === 'director';
+}
 
 function upsertUser(userId, username, chatId, role) {
   const existing = getUser(userId);
@@ -48,11 +77,45 @@ function upsertUser(userId, username, chatId, role) {
     db.prepare('UPDATE users SET username=?, chat_id=? WHERE user_id=?').run(username, chatId, userId);
     if (role) db.prepare('UPDATE users SET role=? WHERE user_id=?').run(role, userId);
   } else {
-    db.prepare('INSERT INTO users (user_id,username,chat_id,role) VALUES (?,?,?,?)').run(userId, username, chatId, role || 'employee');
+    db.prepare('INSERT INTO users (user_id,username,chat_id,role) VALUES (?,?,?,?)').run(
+      userId, username, chatId, role || 'employee'
+    );
   }
 }
 
-function promoteToManager(userId, chatId, username) { upsertUser(userId, username, chatId, 'manager'); }
+function promoteToManager(userId, chatId, username) {
+  upsertUser(userId, username, chatId, 'manager');
+}
+
+function promoteToDirector(userId, chatId, username) {
+  upsertUser(userId, username, chatId, 'director');
+}
+
+// Прив'язати підлеглого до керівника
+function assignStaff(employeeId, managerId) {
+  db.prepare('UPDATE users SET manager_id=? WHERE user_id=?').run(managerId, employeeId);
+}
+
+// Отримати підлеглих конкретного керівника
+function getStaffOf(managerId) {
+  return db.prepare('SELECT * FROM users WHERE manager_id=? ORDER BY username').all(managerId);
+}
+
+// Отримати керівника підлеглого
+function getManagerOf(employeeId) {
+  const u = getUser(employeeId);
+  if (!u?.manager_id) return null;
+  return getUser(u.manager_id);
+}
+
+// Всі незакріплені співробітники (без керівника, не менеджери і не директори)
+function getUnassignedEmployees() {
+  return db.prepare(
+    "SELECT * FROM users WHERE manager_id IS NULL AND role='employee' ORDER BY username"
+  ).all();
+}
+
+// --- Задачі ---
 
 function createTask({ employeeId, managerId, title, description, checkpoints, deadline }) {
   const result = db.prepare(
@@ -61,7 +124,9 @@ function createTask({ employeeId, managerId, title, description, checkpoints, de
   return result.lastInsertRowid;
 }
 
-function getTask(id) { return get('SELECT * FROM tasks WHERE id=?', [id]); }
+function getTask(id) {
+  return db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+}
 
 function getTaskFull(id) {
   const t = getTask(id);
@@ -73,16 +138,31 @@ function getTaskFull(id) {
 }
 
 function getManagerTasks(managerId) {
-  return all('SELECT * FROM tasks WHERE manager_id=? ORDER BY created_at DESC', [managerId]);
+  return db.prepare('SELECT * FROM tasks WHERE manager_id=? ORDER BY created_at DESC').all(managerId);
+}
+
+// Задачі призначені підлеглим конкретного менеджера (для директора що ставить задачі його людям)
+function getTasksForStaffOf(managerId) {
+  return db.prepare(`
+    SELECT t.*, u.username as emp_name FROM tasks t
+    JOIN users u ON t.employee_id=u.user_id
+    WHERE u.manager_id=? ORDER BY t.created_at DESC
+  `).all(managerId);
 }
 
 function getEmployeeActiveTasks(employeeId) {
-  return all("SELECT * FROM tasks WHERE employee_id=? AND status='pending' ORDER BY created_at DESC", [employeeId]);
+  return db.prepare(
+    "SELECT * FROM tasks WHERE employee_id=? AND status='pending' ORDER BY created_at DESC"
+  ).all(employeeId);
 }
 
 function completeTask(taskId, comment) {
-  db.prepare("UPDATE tasks SET status='done', done_comment=?, updated_at=datetime('now','localtime') WHERE id=?").run(comment, taskId);
+  db.prepare(
+    "UPDATE tasks SET status='done', done_comment=?, updated_at=datetime('now','localtime') WHERE id=?"
+  ).run(comment, taskId);
 }
+
+// --- Нагадування ---
 
 function addReminder(taskId, minutesFromNow) {
   const at = new Date(Date.now() + minutesFromNow * 60000).toISOString();
@@ -90,40 +170,47 @@ function addReminder(taskId, minutesFromNow) {
 }
 
 function getDueReminders() {
-  return all(`
+  return db.prepare(`
     SELECT r.*, t.title, t.employee_id, t.status
     FROM reminders r JOIN tasks t ON r.task_id=t.id
     WHERE r.sent=0 AND r.remind_at<=? AND t.status='pending'
-  `, [new Date().toISOString()]);
+  `).all(new Date().toISOString());
 }
 
-function markReminderSent(id) { db.prepare('UPDATE reminders SET sent=1 WHERE id=?').run(id); }
+function markReminderSent(id) {
+  db.prepare('UPDATE reminders SET sent=1 WHERE id=?').run(id);
+}
+
+// --- Статистика ---
 
 function getManagerStats(managerId) {
   const today = new Date().toISOString().split('T')[0];
-  const todayTasks = all(`
+  const todayTasks = db.prepare(`
     SELECT t.*, u.username as emp_name FROM tasks t
     JOIN users u ON t.employee_id=u.user_id
     WHERE t.manager_id=? AND date(t.created_at)=? ORDER BY t.created_at DESC
-  `, [managerId, today]);
-  const overdueTasks = all(`
+  `).all(managerId, today);
+  const overdueTasks = db.prepare(`
     SELECT t.*, u.username as emp_name FROM tasks t
     JOIN users u ON t.employee_id=u.user_id
     WHERE t.manager_id=? AND t.status='pending' AND t.deadline IS NOT NULL AND t.deadline < date('now','localtime')
     ORDER BY t.deadline
-  `, [managerId]);
-  const allTasks = all(`
+  `).all(managerId);
+  const allTasks = db.prepare(`
     SELECT t.*, u.username as emp_name FROM tasks t
     JOIN users u ON t.employee_id=u.user_id
     WHERE t.manager_id=? ORDER BY t.created_at DESC LIMIT 50
-  `, [managerId]);
+  `).all(managerId);
   return { todayTasks, overdueTasks, allTasks };
 }
 
 module.exports = {
   init,
-  upsertUser, getUser, getEmployees, getManagers, isManager, promoteToManager,
-  createTask, getTask, getTaskFull, getManagerTasks, getEmployeeActiveTasks, completeTask,
+  upsertUser, getUser, getAllUsers, getEmployees, getManagers, getDirectors,
+  isManager, isDirector, promoteToManager, promoteToDirector,
+  assignStaff, getStaffOf, getManagerOf, getUnassignedEmployees,
+  createTask, getTask, getTaskFull, getManagerTasks, getTasksForStaffOf,
+  getEmployeeActiveTasks, completeTask,
   addReminder, getDueReminders, markReminderSent,
   getManagerStats,
 };
